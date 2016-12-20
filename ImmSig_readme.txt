@@ -23,6 +23,10 @@ To run the IS_auto.R script, you first need to do the following:
       >>file containing all BTM (Blood Transcript Module) gene modules
     --bs_to_id_final.tsv
       >>A tab-delimited table to map biosample ids to ImmPort subject / participant ids for SDY212
+    --ImmPort_subjectID_SDY63.csv
+    --ImmPort_subjectID_SDY404.csv
+    --ImmPort_subjectID_SDY400.csv
+      >>Tab-delimited tables to map biosample ids to ImmPort subject / participant ids for Yale Studies
     
     ***SCRIPTS***
     --HIPCMetaModuleAnalysis_v2.R
@@ -44,7 +48,9 @@ To run the IS_auto.R script, you first need to do the following:
       --makeHAItable.R
       --makeDemo.R
       --bs_to_id_final.tsv
-      --Yale IDs to immsig
+      --ImmPort_subjectID_SDY63.csv
+      --ImmPort_subjectID_SDY404.csv
+      --ImmPort_subjectID_SDY400.csv
    --RDSGen
       --makeRds.R
       --GE_preproc_data

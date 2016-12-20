@@ -9,15 +9,40 @@
 
 
 #------Checks---------------
-# check working directory
-# check subdirectories
-# check for all necessary files
+# check directories are named and located appropriately
+full_path <- getwd()
+imm_dir <- basename(full_path)
+output_dir <- dir.exists(paste0(full_path,"output"))
+data_dir <- dir.exists(paste0(full_path,"data"))
 
-# ***FILES***
-#   --BTM_for_GSEA_20131008.GMT
-# >>file containing all BTM (Blood Transcript Module) gene modules
-# --bs_to_id_final.tsv
-# >>A tab-delimited table to map biosample ids to ImmPort subject / participant ids for SDY212
+if(!output_dir | !data_dir | imm_dir == "ImmSig"){
+  stop("File directories not names or located correctly. Please Change before retrying.")
+}
+  
+# check for all necessary files
+# file containing all BTM (Blood Transcript Module) gene modules
+btm_file <- "BTM_for_GSEA_20131008.GMT"
+# A tab-delimited table to map biosample ids to ImmPort subject / participant ids for SDY212
+stan_ids <- "bs_to_id_final.tsv"
+yale_one_ids <- "ImmPort_subjectID_SDY63.csv"
+yale_two_ids <- "ImmPort_subjectID_SDY404.csv"
+yale_three_ids <- "ImmPort_subjectID_SDY400.csv"
+id_files <- c(stan_ids, yale_one_ids, yale_two_ids, yale_three_ids)
+
+if(!file.exists(path(full_path,"data/",btm_file))){
+  stop("File missing from main directory: BTM_for_GSEA_20131008.GMT")
+}
+
+files_present <- list()
+for(fl in id_files){
+  files_presen[[fl]] <- file.exists(path(full_path,"PreProc_Scripts/",fl))
+}
+
+if(FALSE %in% files_present){
+  np <- which(files_present == FALSE)
+  stop(paste0("ID Mapping Files Missing: ", names(np)))
+}
+
 # 
 # ***SCRIPTS***
 #   --HIPCMetaModuleAnalysis_v2.R
