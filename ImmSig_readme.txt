@@ -20,13 +20,17 @@ To run the IS_auto.R script, you first need to do the following:
 2. Download the following files and scripts:
     ***FILES***
     --BTM_for_GSEA_20131008.GMT
-      >>file containing all BTM (Blood Transcript Module) gene modules
-    --bs_to_id_final.tsv
-      >>A tab-delimited table to map biosample ids to ImmPort subject / participant ids for SDY212
-    --ImmPort_subjectID_SDY63.csv
-    --ImmPort_subjectID_SDY404.csv
-    --ImmPort_subjectID_SDY400.csv
-      >>Tab-delimited tables to map biosample ids to ImmPort subject / participant ids for Yale Studies
+      >> file containing all BTM (Blood Transcript Module) gene modules
+    --SDY212_IDmap.tsv
+    --SDY63_IDmap.tsv
+    --SDY400_IDmap.tsv
+    --SDY404_IDmap.tsv
+      >> Tab-delimited tables to map sample ids to ImmPort subject / participant ids
+    --ilmn_ann_tbl_ed.csv
+      >> The full Illumina Human V4 Annotation Table for mapping probe ids to gene symbols
+      >> NOTE: this was used instead of the library(illuminaHumanv4.db) because not all
+      >> gene symbols were found using the illuminaHumanv4$SYMBOL submap. The only edits made 
+      >> to the original text file were The first 16 explanatory rows were removed.
     
     ***SCRIPTS***
     --HIPCMetaModuleAnalysis_v2.R
@@ -47,10 +51,11 @@ To run the IS_auto.R script, you first need to do the following:
       --makeGEmatrix.R
       --makeHAItable.R
       --makeDemo.R
-      --bs_to_id_final.tsv
-      --ImmPort_subjectID_SDY63.csv
-      --ImmPort_subjectID_SDY404.csv
-      --ImmPort_subjectID_SDY400.csv
+      --SDY212_IDmap.tsv
+      --SDY63_IDmap.tsv
+      --SDY400_IDmap.tsv
+      --SDY404_IDmap.tsv
+      --ilmn_ann_tbl_ed.csv
    --RDSGen
       --makeRds.R
       --GE_preproc_data

@@ -4,7 +4,22 @@
 
 # Purpose: Auto the full pipeline of extraction, processing, and analysis of data for the Immune Signatures Project
 
-#------Dependencies---------
+#------GE Dependencies---------
+library(ImmuneSpaceR)
+library(httr)
+library(R.utils)
+library(Rlabkey)
+library(tools)
+library(data.table)
+source("https://bioconductor.org/biocLite.R")
+biocLite("preprocessCore")
+
+#------HAI Dependencies--------
+
+
+
+#------Demo Dependencies-------
+
 
 
 
@@ -23,10 +38,10 @@ if(!output_dir | !data_dir | imm_dir == "ImmSig"){
 # file containing all BTM (Blood Transcript Module) gene modules
 btm_file <- "BTM_for_GSEA_20131008.GMT"
 # A tab-delimited table to map biosample ids to ImmPort subject / participant ids for SDY212
-stan_ids <- "bs_to_id_final.tsv"
-yale_one_ids <- "ImmPort_subjectID_SDY63.csv"
-yale_two_ids <- "ImmPort_subjectID_SDY404.csv"
-yale_three_ids <- "ImmPort_subjectID_SDY400.csv"
+stan_ids <- "SDY212_IDmap.tsv"
+yale_one_ids <- "SDY63_IDmap.tsv"
+yale_two_ids <- "SDY404_IDmap.tsv"
+yale_three_ids <- "SDY400_IDmap.tsv"
 id_files <- c(stan_ids, yale_one_ids, yale_two_ids, yale_three_ids)
 
 if(!file.exists(path(full_path,"data/",btm_file))){
@@ -53,6 +68,8 @@ if(FALSE %in% files_present){
 # --makeRds.R
 # check R version
 
+# PROMPT USER FOR USERNAME AND PASSWORD FOR IS
+
 #------Main Methods------------
 
 # Step 1: Extraction and Pre-Processing
@@ -66,7 +83,7 @@ for(sdy in studies){
   print(paste0("Making HAI table for: ",sdy))
   makeHAI(sdy)
   print(paste0("Making GE matrix for: ",sdy))
-  makeGE(sdy)
+  makeGE(sdy,user,pwd)
   print(paste0("Making Demo table for: ",sdy))
   makeDemo(sdy)
 }
