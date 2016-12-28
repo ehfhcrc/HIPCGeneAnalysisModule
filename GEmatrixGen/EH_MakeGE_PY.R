@@ -15,27 +15,33 @@
 
 #-------TESTING NOTES------(uncomment if running alone)--------------------
 # Long load time because of loading the two large anno tables
-setwd("/home/ehenrich/R/HIPCGeneModuleAnalysis/")
-library(ImmuneSpaceR)
-library(httr)
-library(R.utils)
-library(Rlabkey)
-library(tools)
-library(data.table)
-source("https://bioconductor.org/biocLite.R")
-biocLite("preprocessCore")
+# setwd("/home/ehenrich/R/HIPCGeneModuleAnalysis/")
+# library(ImmuneSpaceR)
+# library(httr)
+# library(R.utils)
+# library(Rlabkey)
+# library(tools)
+# library(data.table)
+# source("https://bioconductor.org/biocLite.R")
+# biocLite("preprocessCore")
+#
+# Top two tables are provided directly from Illumina for annotation for the corresponding beadchip.
+# They are loaded directly because the packages available in bioconductor are either
+# defunct (450k Methylation - SDY67) or did not find all probe ids (Humanv4 - Yale Studies). Final table 
+# was generated from the original tables developed by Yuri Kotliarov at NIH because Affymetrix
+# does not provide annotation tables to the public.
+# hmnv4_ann_tbl <- read.csv(paste0(rd_dir,"IlluminaHuman_v4_anno_table.csv"),
+#                           stringsAsFactors = F)
+# hmn450k_ann_tbl <- read.table(paste0(rd_dir,"IlluminaHuman_450kMethylation_anno_table.txt"),
+#                               stringsAsFactors = F, sep = "\t", header = T)
+# hmnxn1_ann_tbl <- read.table(paste0(rd_dir,"CHI_nih_gene_map.tsv"),
+#                              stringsAsFactors = F, sep = "\t", header = T)
 
-#-----DIR SETUP / GLOBAL VARS-----------------------------------------------
-wk_dir <- getwd()
-mgen_dir <- file.path(wk_dir,"GEmatrixGen")
-rd_dir <- file.path(mgen_dir,"rawdata/")
-dir.create(rd_dir, showWarnings = F)
-# These tables are provided directly from Illumina for annotation for the corresponding beadchip.
-# I have chosen to load them directly because the packages available in bioconductor are either
-# defunct (450k Methylation - SDY67) or did not find all probe ids (Humanv4 - Yale Studies).
-hmnv4_ann_tbl <- read.csv(paste0(rd_dir,"IlluminaHuman_v4_anno_table.csv"), stringsAsFactors = F)
-hmn450k_ann_tbl <- read.table(paste0(rd_dir,"IlluminaHuman_450kMethylation_anno_table.txt"),
-                              stringsAsFactors = F, sep = "\t", header = T)
+# wk_dir <- getwd()
+# mgen_dir <- file.path(wk_dir,"GEmatrixGen")
+# rd_dir <- file.path(mgen_dir,"rawdata/")
+# dir.create(rd_dir, showWarnings = F)
+
 
 #------HELPER METHODS ------------------------------------------------------
 # Get gene expression file names from ImmuneSpace and return as data frame
@@ -45,6 +51,7 @@ get_gef <- function(sdy){
   gef <- gef[ which(gef$file_info_name != "NA" & gef$study_time_collected == 0),  ]
   return(gef)
 }
+
 
 # download microarray or gene expression files from ImmuneSpace and return list of file paths
 get_is_files <- function(gef, sdy, user, pwd){
@@ -67,6 +74,7 @@ get_is_files <- function(gef, sdy, user, pwd){
   return(inputFiles)
 }
 
+
 # download gene expression files from immport for yale studies
 get_immport_files <- function(sdy){
   link <- ""
@@ -84,6 +92,46 @@ get_immport_files <- function(sdy){
   return(inputFile)
 }
 
+# Significantly faster than using data.table or which statements for searching hash
+hashmap <- function(keys, values, targ_vec){
+  tmp_hash <- hash(keys, values)
+  mapped_res <- sapply(targ_vec, FUN = function(x){
+    val <- tmp_hash[[x]]
+    return(val)
+  })
+  return(mapped_res)
+}
+
+# Generate subject ID values that can be used downstream and mapped to expr values
+map_headers <- function(sdy, exprs_headers, is_col, smpl_col){
+  id_map <- read.table(paste0("GEmatrixGen/",sdy,"_IDmap.tsv"), 
+                       sep = "\t", stringsAsFactors = F)
+  
+  if(sdy %in% c("SDY212","SDY67")){
+    mapped_headers <- hashmap(id_map[[smpl_col]], id_map[[is_col]], exprs_headers)
+  }else if(sdy %in% c("SDY63","SDY400","SDY404")){
+    mapped_headers <- sapply(exprs_headers, FUN = function(x){
+      spl_x <- strsplit(x, split = "_")
+      if(sdy == "SDY63"){
+        # sample ids were off according to original code, therefore correct
+        spl_x[[1]][1] = as.integer(spl_x[[1]][1]) + 91000
+      }
+      sub_no_date <- id_map[[is_col]][which(id_map[[smpl_col]] == spl_x[[1]][1])]
+      res <- paste0(sub_no_date,"_d",spl_x[[1]][3])
+      return(res)
+    })
+  }
+  
+  # for the case where two instances / columns of one participant "SUB134307"
+  if(sdy == "SDY212"){
+    dbl_subid <- which(mapped_headers == "SUB134307_d0")
+    mapped_headers[dbl_subid[1]] <- "SUB134307.1_d0"
+    mapped_headers[dbl_subid[2]] <- "SUB134307.2_d0"
+  }
+  return(mapped_headers)
+}
+
+
 # normalize expression values and map heads to correct subject ids
 norm_map_mx <- function(sdy, exprs, is_col, smpl_col){
   # normalize expression values
@@ -95,36 +143,20 @@ norm_map_mx <- function(sdy, exprs, is_col, smpl_col){
   
   # map headers to correct IS subject ids
   exprs_headers <- colnames(norm_exprs)
-  id_map <- read.table(paste0("GEmatrixGen/",sdy,"_IDmap.tsv"), 
-                       sep = "\t", stringsAsFactors = F)
-  
-  mapped_headers <- sapply(exprs_headers, FUN = function(x){
-    res <- ""  
-      if(sdy == "SDY212" | sdy == "SDY67"){
-        res <- id_map[[is_col]][which(id_map[[smpl_col]] == x)]
-      }else if(sdy %in% c("SDY63","SDY400","SDY404")){
-        spl_x <- strsplit(x, split = "_")
-        if(sdy == "SDY63"){
-          # sample ids were off according to original code, therefore correct
-          spl_x[[1]][1] = as.integer(spl_x[[1]][1]) + 91000
-        }
-        sub_no_date <- id_map[[is_col]][which(id_map[[smpl_col]] == spl_x[[1]][1])]
-        res <- paste0(sub_no_date,"_d",spl_x[[1]][3])
-      }
-    return(res)
-    })
-  
-  # for the case where double of one participant "SUB134307"
-  if(sdy == "SDY212"){
-    dbl_subid <- which(mapped_headers == "SUB134307_d0")
-    mapped_headers[dbl_subid[1]] <- "SUB134307.1_d0"
-    mapped_headers[dbl_subid[2]] <- "SUB134307.2_d0"
-  }
+  mapped_headers <- map_headers(sdy, exprs_headers, is_col, smpl_col)
   
   # change colnames to sub_ids instead of biosample_ids
   colnames(norm_exprs) <- mapped_headers
   return(norm_exprs)
 }
+
+
+# Remove subjects not found in original files.  Unclear why subjects were removed.
+remove_subs <- function(expr_matrix, subs_to_rm){
+  expr_matrix <- expr_matrix[ , !(colnames(expr_matrix) %in% subs_to_rm)]
+  return(expr_matrix)
+}
+
 
 # write out final file containing prove ids, gene symbols, and expression values
 write_out <- function(probe_ids, gene_syms, norm_map_exprs, sdy){
@@ -136,8 +168,12 @@ write_out <- function(probe_ids, gene_syms, norm_map_exprs, sdy){
     row.names = NULL)
   
   write.table(out, file = paste0(wk_dir,"/RDSGen/GE_preproc_data/",sdy,".GEMatrix.EH.txt"), 
-              sep = "\t", quote=FALSE, row.names=FALSE)
+              sep = "\t", 
+              quote=FALSE, 
+              row.names=FALSE)
 }
+
+
 
 #---------MAIN METHOD--------------------------------------------------------
 makeGE <- function(sdy, user, pwd){
@@ -156,6 +192,10 @@ makeGE <- function(sdy, user, pwd){
     if(sdy == "SDY212"){
       # Clean and Prep
       rawdata <- fread(inputFiles, header = TRUE)
+      # remove gene with NA values. These NAs are found in ImmPort as well.
+      # ImmPort staff (Patrick.Dunn@nih.gov) said this was an unresolved issue
+      # with ticket "HDB-13" last discussed in October 2015 with study authors.
+      rawdata <- rawdata[ -c(which(rawdata$PROBE_ID == "ILMN_2137536")),]
       probe_ids <- rawdata[, PROBE_ID]
       gene_syms <- rawdata[ , SYMBOL]
       sigcols <- grep("Signal", colnames(rawdata), value = TRUE)
@@ -164,6 +204,11 @@ makeGE <- function(sdy, user, pwd){
       
       # Norm / Map
       final_expr_vals <- norm_map_mx(sdy, rawdata, "final_id", "BioSampleID")
+      
+      # remove subjects not found in original file
+      subs_rm <- c("SUB134242_d0","SUB134267_d0")
+      final_expr_vals <- remove_subs(final_expr_vals, subs_rm)
+      
       write_out(probe_ids, gene_syms, final_expr_vals, sdy)
       
     
@@ -200,7 +245,7 @@ makeGE <- function(sdy, user, pwd){
       })))
       
       #these subjects were removed from original file, therefore removing here
-      sub_rmv <- c("SUB113458_d0","SUB113463_d0","SUB113470_d0","SUB113473_d0","SUB113474_d0",
+      subs_rm <- c("SUB113458_d0","SUB113463_d0","SUB113470_d0","SUB113473_d0","SUB113474_d0",
                     "SUB113476_d0","SUB113483_d0","SUB113487_d0","SUB113490_d0","SUB113494_d0",
                     "SUB113495_d0","SUB113496_d0","SUB113498_d0","SUB113504_d0","SUB113505_d0",
                     "SUB113513_d0","SUB113514_d0","SUB113524_d0","SUB113526_d0","SUB113527_d0",
@@ -208,18 +253,20 @@ makeGE <- function(sdy, user, pwd){
                     "SUB113555_d0","SUB113558_d0","SUB113559_d0","SUB113561_d0","SUB113566_d0",
                     "SUB113567_d0","SUB113568_d0","SUB113571_d0","SUB113572_d0","SUB113582_d0",
                     "SUB113583_d0","SUB113588_d0","SUB113595_d0","SUB113610_d0")
-      
-      final_expr_vals <- final_expr_vals[ , !(names(final_expr_vals) %in% sub_rmv)]
+      final_expr_vals <- remove_subs(final_expr_vals, subs_rm)
       
       # get ILMN-probes for gene symbols. NOTE: orig file does not actually have probe id vals.
-      probe_ids <- sapply(gs_tbl$GENE_SYMBOL, FUN = function(x){
-        res <- hmn450k_ann_tbl$ID[which(hmn450k_ann_tbl$Closest_TSS_gene_name == x)]
-        if(length(res) > 0){
-          return(res[[1]])
-        }else{
-          return("X")
-        }
-      })
+      probe_ids <- hashmap(hmn450k_ann_tbl$Closest_TSS_gene_name, 
+                           hmn450k_ann_tbl$ID, 
+                           gs_tbl$GENE_SYMBOL)
+      probe_ids <- sapply(probe_ids, FUN = function(x){
+                            if(is.null(x)){
+                              return(NA)
+                            }else{
+                              return(x)
+                            }
+                   })
+      probe_ids <- unname(unlist(probe_ids))
     }
     
   }else if(sdy %in% c("SDY63","SDY404","SDY400")){
@@ -229,17 +276,55 @@ makeGE <- function(sdy, user, pwd){
     
     # Clean and Prep
     probe_ids <- rawdata$ID_REF
-    gene_syms <- sapply(probe_ids, FUN = function(x){
-      hmnv4_ann_tbl$ILMN_Gene[which(hmnv4_ann_tbl$ID == x)]
-    })
+    gene_syms <- hashmap(hmnv4_ann_tbl$ID, hmnv4_ann_tbl$ILMN_Gene, probe_ids)
+    
+    
+    # gene_syms <- sapply(probe_ids, FUN = function(x){
+    #   hmnv4_ann_tbl$ILMN_Gene[which(hmnv4_ann_tbl$ID == x)]
+    # })
     rawdata <- rawdata[ , grepl("PBMC", names(rawdata))]
     
     # Norm / Map
     final_expr_vals <- norm_map_mx(sdy, rawdata, "Sub.Org.Accession", "User.Defined.ID")
     
-  }else{
-    # for CHI-nih study
-    inputFiles <- XXXX
+  }else if(sdy == "CHI-nih"){
+    # for CHI-nih study, the rawdata is taken from the NCBI GEO accession GSE47353 series_matrix file,
+    # which as been renamed 'CHI-nih_GE_matrix.txt' for clarity.
+    rawdata <- read.table(file.path(rd_dir,"CHI-nih_GE_matrix.txt"),
+                             sep = "\t", 
+                             stringsAsFactors = F, 
+                             skip = 97, 
+                             fill= T, 
+                             header = F)
+    header_row <- read.table(file.path(rd_dir,"CHI-nih_GE_matrix.txt"),
+                                 sep = "\t", 
+                                 stringsAsFactors = F, 
+                                 skip = 42, 
+                                 nrow = 1)
+    
+    # Change names to match original file
+    header_row[1] <- "ID_REF"
+    header_row <- sapply(header_row, FUN = function(x){
+      x <- gsub("PBMC", "sub", x)
+      x <- gsub("day", "d", x)
+      x <- gsub("-","neg",x)
+    })
+    colnames(rawdata) <- header_row
+    
+    # map gene symbols to probe ids // using a file created by IDs and gs from original
+    # CHI-nih.GEmatrix.txt.  Remove all rows that were not successfully mapped, which is 
+    # approximately 45%.  Unsure why this was done.
+    gene_syms <- hashmap(hmnxn1_ann_tbl$probeID, hmnxn1_ann_tbl$gs, rawdata$ID_REF)
+    gene_syms <- gene_syms[which(sapply(gene_syms, FUN = function(x){!is.null(x)}))]
+    probe_ids <- rawdata$ID_REF[which(rawdata$ID_REF %in% names(gene_syms))]
+    rawdata <- rawdata[ which(rawdata$ID_REF %in% names(gene_syms)), ]
+    
+    # To match the original file, no normalization is done here.  It would appear that 
+    # normalization has already been performed on the data coming from GEO as 'series-matrix.txt'
+    final_expr_vals <- rawdata[ , -1]
+    gene_syms <- unname(unlist(gene_syms))
   }
+  
   write_out(probe_ids, gene_syms, final_expr_vals, sdy)
+  
 }
