@@ -17,6 +17,12 @@ library(data.table)
 library(dplyr)
 library(stringr)
 
+# for local version ... set dir / filename
+# hai_dir <- "/home/ehenrich/R/HIPCGeneModuleAnalysis/HAIgen/"
+# file <- "sdy212_v2.tsv"
+# read in raw data
+# rawdata <- fread(paste0(hai_dir,file))
+
 
 #------Helper Functions---------
 med_sd_calc <- function(prefix,strains,glob_vals,titer_data){
@@ -44,12 +50,25 @@ max_select <- function(subid,trg_col){
 }
 
 # Method by Yuri Kotliarov to categorize an observation based on low and high percentiles
+# Changed slightly to round fc_res_max values to 7 digits prior to comparison with quantile
+# values which are interpolated and therefore can throw off assignment if intention is to 
+# use them as if they are nearest order statistic (similar to type = 3 in quantiles args).
 discretize <- function(df, input_col, low_perc){
-  xq <- quantile(df[[input_col]], c((low_perc/100), 1-(low_perc/100)), na.rm=T)
-  xd <- ifelse(is.na(df[[input_col]]),NA,1)
-  xd[df[[input_col]] <= xq[1]] <-  0
-  xd[df[[input_col]] >= xq[2]] <-  2
-  return(xd)
+  xq <- quantile(df[[input_col]], 
+                 c( (low_perc/100), 1 - (low_perc/100) ), 
+                 na.rm=T,
+                 type = 7)
+  xd <- sapply(df[[input_col]], FUN = function(x){
+    if(is.na(x)){
+      return(NA)
+    }else if(round(x, digits = 7) <= round(xq[[1]], digits = 7)){
+      return(0)
+    }else if(round(x, digits = 7) >= round(xq[[2]], digits = 7)){
+      return(2)
+    }else{
+      return(1)
+    }
+  })
 }
 
 # for splitting participant_id string to remove sdy info
@@ -58,113 +77,137 @@ sub_split <- function(x){
   return(tmp[[1]][1])
 }
 
+drop_cols <- function(df, cols_to_drop){
+  df <- df[ , !(names(df) %in% cols_to_drop)]
+  return(df)
+}
+
 #-----Main method--------------
-# for local version ... set dir / filename
-# hai_dir <- "/home/ehenrich/R/HIPCGeneModuleAnalysis/HAIgen/"
-# file <- "sdy212_v2.tsv"
-# read in raw data
-# rawdata <- fread(paste0(hai_dir,file))
 
 # For IS driven version
 makeHAI <- function(sdy){
+  
+  # Setup directory vars
+  wk_dir <- getwd()
+  hai_dir <- file.path(wk_dir,"RDSGen/HAI_preproc_data")
+  
+  # Get rawdata from ImmuneSpace
   con <- CreateConnection(sdy)
   rawdata <- con$getDataset("hai")
   
   # Generate vectors from rawdata or instantiate variables based on nomenclature of original column headers
   subids <- unique(rawdata$participant_id)
   strains <- unique(rawdata$virus)
+  strains <- sapply(strains, FUN = function(x){
+    x <- gsub("\\.|\\/| |-", "_", x)
+    return(x)
+  })
   cohorts <- unique(rawdata$cohort)
   days_collected <- c(0,28)
   opts <- c("d0_","fc_")
   
-  # Different nomenclature in sdy212 vs rest of studies in terms of strain naming, therefore need mapping
-  strains_adj <- list()
-  for(x in strains){
-    if(x == "B/Brisbane/60/2008"){
-      strains_adj[["B"]] <- x
-    }else if(x == "A/California/7/2009"){
-      strains_adj[["H1N1"]] <- x
-    }else if(x == "A/Perth/16/2009"){
-      strains_adj[["H3N2"]] <- x
-    }else{
-      strains_adj[[x]] <- x
+  # Setup df with columns, including those that will eventually be removed
+  str_names <- list()
+  str_d28_names <- list()
+  for(virus in strains){
+    for(opt in opts){
+      str_names <- c(str_names, paste0(opt, virus))
+      str_names <- c(str_names, paste0(opt, "std_norm_", virus))
     }
+    str_d28_names <- c(str_d28_names, paste0("d28_", virus))
   }
   
-  # Setup df with columns, including those that will eventually be removed to mimic original datasets (e.g. d28_x)
-  titer_data <- as.data.frame(matrix(nrow = length(subids), ncol = 28))
-  colnames(titer_data) <- c("subject","cohort","fc_B","fc_H1N1","fc_H3N2","d0_B","d0_H1N1","d0_H3N2","d28_B","d28_H1N1","d28_H3N2",
-                            "d0_std_norm_B","d0_std_norm_H1N1","d0_std_norm_H3N2","fc_std_norm_B","fc_std_norm_H1N1",
-                            "fc_std_norm_H3N2","d0_norm_max","fc_norm_max","fc_norm_max_ivt","d0_max","fc_max","fc_max_4fc",
-                            "fc_norm_max_d20","fc_norm_max_d30","fc_res_max","fc_res_max_d20","fc_res_max_d30")
+  first_names <- c("subject","cohort")
+  last_names <- c("d0_norm_max","fc_norm_max","fc_norm_max_ivt", "d0_max",
+                  "fc_max","fc_max_4fc", "fc_norm_max_d20","fc_norm_max_d30",
+                  "fc_res_max","fc_res_max_d20","fc_res_max_d30")
+  
+  numcol <- length(str_names) + length(str_d28_names) + length(first_names) + length(last_names)
+  titer_data <- data.frame(matrix(vector(), 
+                                  nrow = 0, 
+                                  ncol = numcol), 
+                           stringsAsFactors = F)
+  colnames(titer_data) <- c(first_names, str_names, str_d28_names, last_names)
   
   # Parse day 0 (initial) and day 28 (follow-up) titer data into df as basis for all future calculations.
-  # NOTE: Because the follow-up titer measurement is not always collected on day 28 exactly, it is assumed 
-  # that any non-zero value represents the 28th day value if there is not a day 28 value present.
+  # NOTE 1: Because the follow-up titer measurement is not always collected on day 28 exactly, 
+  # it is assumed that any value greatere than zero represents the 28th day value if there is 
+  # not a day 28 value present. E.g. SDY 80 / CHI-nih has negative values possible for days collected.
+  # NOTE 2: Subjects may be missing second titers.  This code removes them prior any calculations 
+  # being done.
   iterator <- 1
   for(id in subids){
-    titer_data[iterator,1] <- id
-    cohort_df <- rawdata[which(rawdata$participant_id == id),]
-    cohort_val <- unique(cohort_df$cohort)
-    titer_data[iterator,2] <- cohort_val
-    for(vir_name in names(strains_adj)){
-      for(day in days_collected){
-        col_to_find <- paste0("d",day,"_",vir_name)
-        rowid <- which(rawdata$participant_id == id & rawdata$study_time_collected == day & rawdata$virus == strains_adj[[vir_name]])
-        if(length(rowid) == 0){
-          rowid <- which(rawdata$participant_id == id & rawdata$study_time_collected != 0 & rawdata$virus == strains_adj[[vir_name]])
+    sub_data <- nrow(rawdata[which(rawdata$participant_id == id),])
+    if(sub_data >= 6){
+      titer_data[iterator,1] <- id
+      cohort_df <- rawdata[which(rawdata$participant_id == id),]
+      cohort_val <- unique(cohort_df$cohort)
+      titer_data[iterator,2] <- cohort_val
+      for(vir_name in names(strains)){
+        for(day in days_collected){
+          col_to_find <- paste0("d", day, "_", strains[[vir_name]])
+          rowid <- which(rawdata$participant_id == id & 
+                           rawdata$study_time_collected == day & 
+                           rawdata$virus == vir_name)
+          if(length(rowid) == 0){
+            rowid <- which(rawdata$participant_id == id & 
+                             rawdata$study_time_collected > 0 & 
+                             rawdata$virus == vir_name)
+          }
+          target_row <- rawdata[rowid, ]
+          titer_data[iterator, col_to_find] <- as.integer(target_row$value_reported)
         }
-        target_row <- rawdata[rowid, ]
-        titer_data[iterator,col_to_find] <- as.integer(target_row$value_reported)
       }
+      iterator <- iterator + 1
     }
-    iterator <- iterator + 1
   }
   
   # setup list to hold median and sd values for later use in calculations
   glob_names <- c("d0_med", "d0_sd","fc_med", "fc_sd")
   li <- vector("list",length = length(strains))
-  names(li) <- names(strains_adj)
+  names(li) <- strains
   glob_vals <- list()
   for(l in glob_names){
     glob_vals[[l]] <- li
   }
   
   # calc median and sd for d0 cols
-  glob_vals <- med_sd_calc("d0_",names(strains_adj),glob_vals,titer_data)
+  glob_vals <- med_sd_calc("d0_", strains , glob_vals, titer_data)
   
   # calc fold change
-  for(vir_name in names(strains_adj)){
-    d0_col <- paste0("d0_",vir_name)
-    d28_col <- paste0("d28_",vir_name)
-    fc_col <- paste0("fc_",vir_name)
+  for(virus in strains){
+    d0_col <- paste0("d0_", virus)
+    d28_col <- paste0("d28_", virus)
+    fc_col <- paste0("fc_", virus)
     titer_data[,fc_col] <- titer_data[,d28_col]/titer_data[,d0_col]
   }
   
   # calc fold change med and sd
-  glob_vals <- med_sd_calc("fc_",names(strains_adj),glob_vals,titer_data)
+  glob_vals <- med_sd_calc("fc_", strains , glob_vals, titer_data)
   
   #calc standardized and normalized value for each possibility of (d0,fc) x (B,H1N1,H3N2)
   for(ver in opts){
-    for(vir_name in names(strains_adj)){
-      std_norm_col <- paste0(ver,"std_norm_", vir_name)
-      titer_data[std_norm_col] <- lapply(titer_data[paste0(ver,vir_name)], FUN = function(x){ 
-        (x-glob_vals[[paste0(ver,"med")]][[vir_name]])/glob_vals[[paste0(ver,"sd")]][[vir_name]]})
+    for(virus in strains){
+      std_norm_col <- paste0(ver, "std_norm_", virus)
+      titer_data[std_norm_col] <- lapply(titer_data[paste0(ver, virus)], FUN = function(x){ 
+        ( x - glob_vals[[paste0(ver,"med")]][[virus]]) / glob_vals[[paste0(ver,"sd")]][[virus]]} )
     }
   }
   
   # Assign snapshots of variables to global_env for use with mapply.
   assign("gl_tdata", titer_data, envir = .GlobalEnv)
-  assign("gl_strains", names(strains_adj), envir = .GlobalEnv)
+  assign("gl_strains", strains, envir = .GlobalEnv)
   
   # Select maxima for (d0,fc) x ("","std_norm") columns
   for(ver in opts){
-    titer_data[[paste0(ver,"max")]] <- mapply(max_select,titer_data$subject,ver)
-    titer_data[[paste0(ver,"norm_max")]] <- mapply(max_select,titer_data$subject,paste0(ver,"std_norm_"))
+    titer_data[[paste0(ver,"max")]] <- mapply(max_select, titer_data$subject, ver)
+    titer_data[[paste0(ver,"norm_max")]] <- mapply(max_select, titer_data$subject, paste0(ver,"std_norm_"))
   }
   
   # determine fc_max_4fc, which is categorization based on fold change > 4
-  titer_data$fc_max_4fc <- unlist(lapply(titer_data$fc_max, FUN = function(x){if(x > 4){return(1)}else{return(0)}}))
+  titer_data$fc_max_4fc <- unlist(lapply(titer_data$fc_max, FUN = function(x){
+    if(x > 4){return(1)}else{return(0)}
+    }))
   
   # Inverse normal transformation of standardized/normalized max fold change column
   # Done by quantile normalization on a modified ranking of observations
@@ -180,8 +223,8 @@ makeHAI <- function(sdy){
   # Generate subset matrices based on age and perform statistical work on each separately
   # SDY212 and the other studies use different nomenclature for categorization, therefore 
   # need to check against lists
-  yng_ls <- c("Cohort_1","Young adults 21-30 years old")
-  old_ls <- c("Cohort_2","Older adults >= 65 years old")
+  yng_ls <- c("Cohort_1", "Young adults 21-30 years old")
+  old_ls <- c("Cohort_2", "Cohort2", "Older adults >= 65 years old", "healthy adults, 50-74 yo")
   for(coh in cohorts){
     if(coh %in% yng_ls){
       submxs[["young"]]  <- titer_data[which(titer_data$cohort == coh),]
@@ -194,45 +237,55 @@ makeHAI <- function(sdy){
   # according to a manual selection and then normalizing/standardizing 
   # the inverse normal transformation values within bins that have been selected manually.
   # This code is based on Yuri Kotliarov's work.
-  bins <- list()
-  bins$combined <- c(1,5)
-  bins$young <- c(1,5)
-  bins$old <- c()
+  SDY404_bins <- list(c(1,5),c(1,5),c(0))
+  SDY212_bins <- list(c(0.01),c(0.05),c(0.01))
+  SDY400_bins <- list(c(1,5),c(1,5),c(1,5))
+  SDY63_bins <- list(c(2,6),c(2),c(2))
+  # These were done by trial and error, b/c not noted in pngs in google drive or Yuri's code
+  SDY67_bins <- list(c(0.1),c(),c(0.1))
+  SDY80_bins <- list(c(1,5),c(),c())
+  
+  bname <- paste0(sdy,"_bins")
+  bins <- get(bname)
+  names(bins) <- c("combined", "young", "old")
   
   for(name in names(submxs)){
     df <- submxs[[name]]
-    df$bin <- cut(df$d0_norm_max, breaks = c(-Inf, bins[[name]], Inf), labels = 1:(length(bins[[name]])+1) )
+    df$bin <- cut(df$d0_norm_max, 
+                  breaks = c(-Inf, bins[[name]], Inf), 
+                  labels = 1:(length(bins[[name]])+1) )
     df = df %>%
       group_by(bin) %>%
-      mutate(fc_res_max = (fc_norm_max_ivt - median(fc_norm_max_ivt, na.rm=T)) / sd(fc_norm_max_ivt, na.rm=T)) %>%
+      mutate(fc_res_max = 
+               (fc_norm_max_ivt - median(fc_norm_max_ivt, na.rm=T)) / sd(fc_norm_max_ivt, na.rm=T)) %>%
       ungroup()
     
     # discretize for all combinations of ("fc_norm_max","fc_res_max") x ("d20","d30")
-    in_cols <- c("fc_norm_max","fc_res_max")
-    in_percs <- c(20,30)
+    in_cols <- c("fc_norm_max", "fc_res_max")
+    in_percs <- c(20, 30)
     for(cl in in_cols){
       for(perc in in_percs){
-        targ_col <- paste0(cl,"_d",perc)
+        targ_col <- paste0(cl,"_d", perc)
         df[[targ_col]] <- discretize(df, cl, perc)
       }
     }
     
-    # Remove d28, bin, and cohort columns b/c not present in results of original manual versions
-    drops <- c("d28_B","d28_H1N1","d28_H3N2","bin","cohort")
-    df <- df[ , !(names(df) %in% drops)]
-    
+    # Remove d28, bin, and cohort columns b/c not present in results of original manual versions.
+    df <- drop_cols(df, c(str_d28_names, "bin", "cohort"))
+
     # remove extra sdy info on subids
     df$subject <- unlist(lapply(df$subject, sub_split))
     
-    # remove rows with NA values caused by lack of second titer BUT NOT those that may 
-    # have NaN values in other places (e.g. $fc_res_max for SUB120471 in sdy404) due to 
-    # other reasons such as extreme d0 titer values
-    df <- df[which(!is.na(df$fc_B)),]
-    
     # output tibble / df as a tab-delimited file
     base <- "_hai_titer_table_EH.txt"
-    fname <- paste0(sdy,"_",name,base)
-    write.table(df,fname,sep = "\t", col.names = TRUE)
+    fname <- ""
+    if(sdy == "SDY80"){
+      fname <- paste0("CHI-nih_", name, base)
+    }else{
+      fname <- paste0(sdy, "_", name, base)
+    }
+    
+    write.table(df, file = file.path(hai_dir,fname), sep = "\t", col.names = TRUE)
   }
 }
   
