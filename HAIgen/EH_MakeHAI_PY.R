@@ -12,10 +12,10 @@
 # collaborating labs via a google drive and also to handle all the studies used in the meta-analysis in an automated format.
 
 #------Dependencies-------------
-library(ImmuneSpaceR)
-library(data.table)
-library(dplyr)
-library(stringr)
+# library(ImmuneSpaceR)
+# library(data.table)
+# library(dplyr)
+# library(stringr)
 
 # for local version ... set dir / filename
 # hai_dir <- "/home/ehenrich/R/HIPCGeneModuleAnalysis/HAIgen/"
@@ -39,6 +39,22 @@ med_sd_calc <- function(prefix,strains,glob_vals,titer_data){
     }
   }
   return(glob_vals)
+}
+
+# Seems computationally costly, but enough edge cases merit checking for valid data before extraction
+sub_check <- function(sub_df, strains){
+  result <- list()
+  for(vir in strains){
+    d_zero <- sub_df[which(sub_df$virus == vir & sub_df$study_time_collected == 0),]
+    d_other <- sub_df[which(sub_df$virus == vir & sub_df$study_time_collected != 0),]
+    if(nrow(d_zero) > 0 & nrow(d_other) > 0){
+      result[[vir]] <- TRUE
+    }else{
+      result[[vir]] <- FALSE
+    }
+  }
+  final <- !(FALSE %in% result)
+  return(final)
 }
 
 max_select <- function(subid,trg_col){
@@ -93,7 +109,11 @@ makeHAI <- function(sdy){
   
   # Get rawdata from ImmuneSpace
   con <- CreateConnection(sdy)
-  rawdata <- con$getDataset("hai")
+  if(sdy == "SDY80"){
+    rawdata <- con$getDataset("neut_ab_titer")
+  }else{
+    rawdata <- con$getDataset("hai")
+  }
   
   # Generate vectors from rawdata or instantiate variables based on nomenclature of original column headers
   subids <- unique(rawdata$participant_id)
@@ -130,15 +150,19 @@ makeHAI <- function(sdy){
   colnames(titer_data) <- c(first_names, str_names, str_d28_names, last_names)
   
   # Parse day 0 (initial) and day 28 (follow-up) titer data into df as basis for all future calculations.
-  # NOTE 1: Because the follow-up titer measurement is not always collected on day 28 exactly, 
-  # it is assumed that any value greatere than zero represents the 28th day value if there is 
-  # not a day 28 value present. E.g. SDY 80 / CHI-nih has negative values possible for days collected.
-  # NOTE 2: Subjects may be missing second titers.  This code removes them prior any calculations 
-  # being done.
+  # NOTE: Because the follow-up titer measurement is not always collected on day 28 exactly, 
+  # it is assumed that any value greater than 0 represents the 28th day value if there is 
+  # not a day 28 value present. E.g. SDY 80 / CHI-nih has negative values possible for days collected
+  # as well as possible days 7 and 70. The first of the days over 0 are used because this is what
+  # was done in the original file as determined by comparing fold change values for SUB114476.80.
   iterator <- 1
   for(id in subids){
-    sub_data <- nrow(rawdata[which(rawdata$participant_id == id),])
-    if(sub_data >= 6){
+    sub_data <- rawdata[which(rawdata$participant_id == id),]
+    valid <- sub_check(sub_data, names(strains))
+    # num_strains <- nrow(sub_data)/2
+    # second_titer <- max(unique(sub_data$study_time_collected)) > 0
+    # # Do not allow those without second titers for each strain to generate record
+    if(valid == TRUE){
       titer_data[iterator,1] <- id
       cohort_df <- rawdata[which(rawdata$participant_id == id),]
       cohort_val <- unique(cohort_df$cohort)
@@ -154,8 +178,20 @@ makeHAI <- function(sdy){
                              rawdata$study_time_collected > 0 & 
                              rawdata$virus == vir_name)
           }
+          if(length(rowid) > 1){
+            rowid <- rowid[[1]]
+          }
           target_row <- rawdata[rowid, ]
-          titer_data[iterator, col_to_find] <- as.integer(target_row$value_reported)
+          
+          # for testing:
+          # print(paste(id, col_to_find))
+          
+          if(sdy == "SDY80" & target_row$value_reported == 19){ # To mimic original table
+            titer_data[iterator, col_to_find] <- 10
+          }else{
+            titer_data[iterator, col_to_find] <- as.integer(target_row$value_reported)
+          }
+          
         }
       }
       iterator <- iterator + 1
@@ -241,8 +277,13 @@ makeHAI <- function(sdy){
   SDY212_bins <- list(c(0.01),c(0.05),c(0.01))
   SDY400_bins <- list(c(1,5),c(1,5),c(1,5))
   SDY63_bins <- list(c(2,6),c(2),c(2))
-  # These were done by trial and error, b/c not noted in pngs in google drive or Yuri's code
-  SDY67_bins <- list(c(0.1),c(),c(0.1))
+  # Following were done by trial and error, b/c not noted in pngs in google drive or Yuri's code
+  # Method of finding them was to make data.frame($fc_res_max,$fc_norm_max_ivt,$d0_norm_max),
+  # from original file then df <- df[order($fc_norm_max_ivt,$d0_norm_max),] .
+  # by looking at where ivt is the same but fc_res_max was different, one can guess that they
+  # were therefore in different bins and estimate the cutoff points by looking at the 
+  # d0_norm_max column
+  SDY67_bins <- list(c(0.1,0.5,1.5,4,6),c(),c(0.1,0.5,1.5,4,6))
   SDY80_bins <- list(c(1,5),c(),c())
   
   bname <- paste0(sdy,"_bins")
